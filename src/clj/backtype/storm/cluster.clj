@@ -93,8 +93,6 @@
   (storm-base [this storm-id callback])
 
   (task-storms [this])
-  (task-ids [this storm-id])
-  (task-info [this storm-id task-id])
   (task-heartbeat [this storm-id task-id]) ;; returns nil if doesn't exist
   (supervisors [this callback])
   (supervisor-info [this supervisor-id])  ;; returns nil if doesn't exist
@@ -106,7 +104,6 @@
   (task-error-storms [this])
   (heartbeat-tasks [this storm-id])
 
-  (set-task! [this storm-id task-id info])
   (task-heartbeat! [this storm-id task-id info])
   (remove-task-heartbeat! [this storm-id task-id])
   (supervisor-heartbeat! [this supervisor-id info])
@@ -145,12 +142,6 @@
 
 (defn storm-path [id]
   (str STORMS-SUBTREE "/" id))
-
-(defn storm-task-root [storm-id]
-  (str TASKS-SUBTREE "/" storm-id))
-
-(defn task-path [storm-id task-id]
-  (str (storm-task-root storm-id) "/" task-id))
 
 (defn taskbeat-storm-root [storm-id]
   (str TASKBEATS-SUBTREE "/" storm-id))
@@ -244,15 +235,6 @@
         (get-children cluster-state TASKS-SUBTREE false)
         )
 
-      (task-ids [this storm-id]
-        (map parse-int
-          (get-children cluster-state (storm-task-root storm-id) false)
-          ))
-
-      (task-info [this storm-id task-id]
-        (maybe-deserialize (get-data cluster-state (task-path storm-id task-id) false))
-        )
-
       ;; TODO: add a callback here so that nimbus can respond immediately when it goes down? 
       (task-heartbeat [this storm-id task-id]
         (maybe-deserialize (get-data cluster-state (taskbeat-path storm-id task-id) false))
@@ -266,10 +248,6 @@
 
       (supervisor-info [this supervisor-id]
         (maybe-deserialize (get-data cluster-state (supervisor-path supervisor-id) false))
-        )
-
-      (set-task! [this storm-id task-id info]
-        (set-data cluster-state (task-path storm-id task-id) (Utils/serialize info))
         )
 
       (task-heartbeat! [this storm-id task-id info]
@@ -326,7 +304,6 @@
         )
 
       (remove-storm! [this storm-id]
-        (delete-node cluster-state (storm-task-root storm-id))
         (delete-node cluster-state (assignment-path storm-id))
         (remove-storm-base! this storm-id))
 

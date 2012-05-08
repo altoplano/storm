@@ -9,9 +9,12 @@
 
 (bootstrap)
 
-(defn storm-component-info [state storm-name]
-  (let [storm-id (get-storm-id state storm-name)]
-    (reverse-map (storm-task-info state storm-id))))
+(defn storm-component-info [cluster storm-name]
+  (let [storm-id (get-storm-id (:storm-cluster-state cluster) storm-name)
+        nimbus (:nimbus cluster)]
+    (-> (.getTopology nimbus storm-id)
+        (storm-task-info (.getTopologyConf nimbus storm-id))
+        reverse-map)))
 
 (defn storm-num-workers [state storm-name]
   (let [storm-id (get-storm-id state storm-name)
@@ -42,10 +45,14 @@
     (:task->start-time-secs assignment)
     ))
 
+(defn task-ids [cluster storm-id]
+  ;; TODO: finish
+  )
+
 (defnk check-consistency [cluster storm-name :assigned? true]
   (let [state (:storm-cluster-state cluster)
         storm-id (get-storm-id state storm-name)
-        task-ids (.task-ids state storm-id)
+        task-ids (task-ids cluster storm-name)
         assignment (.assignment-info state storm-id nil)
         task->node+port (:task->node+port assignment)
         all-nodes (set (map first (vals task->node+port)))]
@@ -59,7 +66,7 @@
     ))
 
 (deftest test-assignment
-  (with-local-cluster [cluster :supervisors 4 :ports-per-supervisor 3 :daemon-conf {SUPERVISOR-ENABLE false TOPOLOGY-ACKERS 0}]
+  (with-local-cluster [cluster :supervisors 4 :ports-per-supervisor 3 :daemon-conf {SUPERVISOR-ENABLE false TOPOLOGY-ACKER-TASKS 0}]
     (let [state (:storm-cluster-state cluster)
           nimbus (:nimbus cluster)
           topology (thrift/mk-topology
@@ -73,7 +80,7 @@
                       "4" (thrift/mk-bolt-spec {"1" :global "2" :none} (TestPlannerBolt.) :parallelism-hint 4)}
                      )
           _ (submit-local-topology nimbus "mystorm" {TOPOLOGY-OPTIMIZE false TOPOLOGY-WORKERS 4} topology)
-          task-info (storm-component-info state "mystorm")]
+          task-info (storm-component-info cluster "mystorm")]
       (check-consistency cluster "mystorm")
       ;; 3 should be assigned once (if it were optimized, we'd have
       ;; different topology)
@@ -85,7 +92,7 @@
       (submit-local-topology nimbus "storm2" {TOPOLOGY-OPTIMIZE false TOPOLOGY-WORKERS 20} topology2)
       (check-consistency cluster "storm2")
       (is (= 2 (count (.assignments state nil))))
-      (let [task-info (storm-component-info state "storm2")]
+      (let [task-info (storm-component-info cluster "storm2")]
         (is (= 12 (count (task-info "1"))))
         (is (= 6 (count (task-info "2"))))
         (is (= 8 (count (task-info "3"))))
@@ -95,7 +102,7 @@
       )))
 
 (deftest test-over-parallelism-assignment
-  (with-local-cluster [cluster :supervisors 2 :ports-per-supervisor 5 :daemon-conf {SUPERVISOR-ENABLE false TOPOLOGY-ACKERS 0}]
+  (with-local-cluster [cluster :supervisors 2 :ports-per-supervisor 5 :daemon-conf {SUPERVISOR-ENABLE false TOPOLOGY-ACKER-TASKS 0}]
     (let [state (:storm-cluster-state cluster)
           nimbus (:nimbus cluster)
           topology (thrift/mk-topology
@@ -105,7 +112,7 @@
                       "4" (thrift/mk-bolt-spec {"1" :none} (TestPlannerBolt.) :parallelism-hint 10)}
                      )
           _ (submit-local-topology nimbus "test" {TOPOLOGY-OPTIMIZE false TOPOLOGY-WORKERS 7} topology)
-          task-info (storm-component-info state "test")]
+          task-info (storm-component-info cluster "test")]
       (check-consistency cluster "test")
       (is (= 21 (count (task-info "1"))))
       (is (= 9 (count (task-info "2"))))
@@ -121,7 +128,7 @@
     :daemon-conf {SUPERVISOR-ENABLE false
                   NIMBUS-TASK-TIMEOUT-SECS 30
                   NIMBUS-MONITOR-FREQ-SECS 10
-                  TOPOLOGY-ACKERS 0}]
+                  TOPOLOGY-ACKER-TASKS 0}]
     (letlocals
       (bind conf (:daemon-conf cluster))
       (bind topology (thrift/mk-topology
@@ -187,7 +194,7 @@
       
       (submit-local-topology (:nimbus cluster) "test3" {TOPOLOGY-MESSAGE-TIMEOUT-SECS 5} topology)
       (bind storm-id3 (get-storm-id state "test3"))
-      (bind task-id (first (.task-ids state storm-id3)))
+      (bind task-id (first (task-ids cluster storm-id3)))
       (do-task-heartbeat cluster storm-id3 task-id)
       (.killTopology (:nimbus cluster) "test3")
       (advance-cluster-time cluster 6)
@@ -213,7 +220,7 @@
                   NIMBUS-TASK-TIMEOUT-SECS 20
                   NIMBUS-MONITOR-FREQ-SECS 10
                   NIMBUS-SUPERVISOR-TIMEOUT-SECS 100
-                  TOPOLOGY-ACKERS 0}]
+                  TOPOLOGY-ACKER-TASKS 0}]
     (letlocals
       (bind conf (:daemon-conf cluster))
       (bind topology (thrift/mk-topology
@@ -224,7 +231,7 @@
       (submit-local-topology (:nimbus cluster) "test" {TOPOLOGY-WORKERS 2} topology)
       (check-consistency cluster "test")
       (bind storm-id (get-storm-id state "test"))
-      (bind [task-id1 task-id2]  (.task-ids state storm-id))
+      (bind [task-id1 task-id2]  (task-ids cluster storm-id))
       (bind ass1 (task-assignment cluster storm-id task-id1))
       (bind ass2 (task-assignment cluster storm-id task-id2))
 
@@ -316,7 +323,7 @@
                   NIMBUS-TASK-LAUNCH-SECS 60
                   NIMBUS-TASK-TIMEOUT-SECS 20
                   NIMBUS-MONITOR-FREQ-SECS 10
-                  TOPOLOGY-ACKERS 0}]
+                  TOPOLOGY-ACKER-TASKS 0}]
     (letlocals
       (bind topology (thrift/mk-topology
                         {"1" (thrift/mk-spout-spec (TestPlannerSpout. true) :parallelism-hint 9)}
@@ -362,7 +369,7 @@
     :daemon-conf {SUPERVISOR-ENABLE false
                   NIMBUS-MONITOR-FREQ-SECS 10
                   TOPOLOGY-MESSAGE-TIMEOUT-SECS 30
-                  TOPOLOGY-ACKERS 0}]
+                  TOPOLOGY-ACKER-TASKS 0}]
     (letlocals
       (bind topology (thrift/mk-topology
                         {"1" (thrift/mk-spout-spec (TestPlannerSpout. true) :parallelism-hint 3)}
